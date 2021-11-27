@@ -102,9 +102,9 @@ namespace seq_logger {
 
         seq_context() = default;
 
-        bool empty() const { return _extras.empty(); };
+        [[nodiscard]] bool empty() const { return _extras.empty(); };
 
-        size_t size() const { return _extras.size(); };
+        [[nodiscard]] size_t size() const { return _extras.size(); };
 
         seq_context(logging_level level_, seq_extras_vector_t &&parameters_, const char *logger_name_) : level(
                 level_), logger_name(logger_name_), _extras(std::move(parameters_)) {};
@@ -131,12 +131,6 @@ namespace seq_logger {
                 : context(std::move(context_)),
                   _message(std::move(message_)) {
             init_time();
-        }
-
-        seq_log_entry(const seq_log_entry &other_)
-                : context(other_.context),
-                  _message(other_._message) {
-            std::strcpy(time, other_.time);
         }
 
         [[nodiscard]] std::string to_raw_json_entry() const {
