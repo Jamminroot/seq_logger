@@ -221,7 +221,7 @@ namespace seq_logger {
             bool hasData(false);
             std::stringstream sstream;
             {
-                std::lock_guard<std::mutex> guard(_s_loggers_mutex);
+                std::lock_guard<std::mutex> static_guard(_s_loggers_mutex);
                 if (_s_loggers.empty()) return;
                 int32_t index = _s_loggers.size() - 1;
                 while (index >= 0) {
@@ -257,11 +257,10 @@ namespace seq_logger {
             if (_s_initialized) return;
             _s_verbosity = _verbosity;
             _s_verbosity_seq = _seq_verbosity;
-            //atexit([] {try {send_events_handler();}
-            //catch (std::exception &e){}});
             _s_endpoint = "http://" + _address + "/api/events/raw?clef";
             _s_initialized = true;
             _s_dispatch_interval = std::chrono::milliseconds(_dispatch_interval);
+            _s_initialized_signal.notify_all();
         }
 
 
@@ -386,7 +385,8 @@ namespace seq_logger {
         inline static std::vector<seq *> _s_loggers;
         inline static std::atomic_int32_t _s_logger_id{0};
         inline static logging_level _s_verbosity_seq;
-
+        inline static std::mutex _s_initialized_signal_mutex;
+        inline static std::condition_variable _s_initialized_signal;
         mutable std::vector<seq_log_entry *> _seq_dispatch_queue;
         mutable std::mutex _logs_mutex;
 
@@ -402,13 +402,15 @@ namespace seq_logger {
             _s_terminating = false;
             _s_verbosity = logging_level::verbose;
             _s_verbosity_seq = logging_level::verbose;
-            _s_dispatch_interval = std::chrono::seconds(1);
+            _s_dispatch_interval = std::chrono::seconds(10);
             _static_instance = true;
             register_logger(this);
             start_thread();
         }
 
         static void send_events_loop_handler() {
+            std::unique_lock<std::mutex> lock{_s_initialized_signal_mutex};
+            _s_initialized_signal.wait(lock);
             while (!_s_terminating) {
                 std::this_thread::sleep_for(_s_dispatch_interval);
                 send_events_handler();
