@@ -7,7 +7,6 @@
 #include <cstring>
 #include <memory>
 #include <mutex>
-#include <shared_mutex>
 #include <sstream>
 #include <string>
 #include <thread>
