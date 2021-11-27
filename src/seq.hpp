@@ -186,24 +186,29 @@ namespace seq_logger {
         logging_level verbosity_seq = logging_level::verbose;
 
         seq() {
-            finalize({});
+            finish_initialization({});
         }
 
         seq(const char *_name, seq_extras_vector_t &&_extras) : _shared_extras(std::move(_extras)) {
-            finalize(_name);
+            finish_initialization(_name);
         }
 
         seq(const char *_name, seq_extras_pair_t &&_extra) : _shared_extras({std::move(_extra)}) {
-            finalize(_name);
+            finish_initialization(_name);
         }
 
-        seq(const char *_name) {
-            finalize(_name);
+        explicit seq(const char *_name) {
+            finish_initialization(_name);
         }
 
         ~seq() {
             _enrichers.clear();
-            if (!_static_instance) return;
+            if (!_static_instance) {
+                std::lock_guard<std::mutex> guard(_logs_mutex);
+                unregister_logger(this);
+                shared_instance().transfer_logs(_seq_dispatch_queue);
+                return;
+            }
             _s_terminating = true;
             std::unique_lock<std::mutex> lock {_s_thread_finished_mutex};
             _s_thread_finished.wait(lock);
@@ -221,17 +226,24 @@ namespace seq_logger {
         static void send_events_handler() {
             bool hasData(false);
             std::stringstream sstream;
-
             {
-                std::lock_guard<std::mutex> guard(_s_logs_lock);
-                while(!_s_seq_dispatch_queue.empty()) {
-                    hasData = true;
-                    sstream << _s_seq_dispatch_queue.back()->to_raw_json_entry() << "\n";
-                    delete _s_seq_dispatch_queue.back();
-                    _s_seq_dispatch_queue.pop_back();
+                std::lock_guard<std::mutex> guard(_s_loggers_mutex);
+                if (_s_loggers.empty()) return;
+                int32_t index = _s_loggers.size()-1;
+                while(index>=0){
+                    auto &logger = _s_loggers[index];
+                    std::lock_guard<std::mutex> guard(logger->_logs_mutex);
+
+                    while(!logger->_seq_dispatch_queue.empty()) {
+                        hasData = true;
+                        sstream << logger->_seq_dispatch_queue.back()->to_raw_json_entry() << "\n";
+                        delete logger->_seq_dispatch_queue.back();
+                        logger->_seq_dispatch_queue.pop_back();
+                    }
+
+                    --index;
                 }
             }
-
             if (hasData) {
                 try {
                     auto request = http::Request{_s_endpoint};
@@ -260,7 +272,7 @@ namespace seq_logger {
 
 
         void add_extra(std::string _key, stringified_value _val) {
-            _shared_extras.emplace_back(_key, std::move(_val));
+            _shared_extras.emplace_back(std::move(_key), std::move(_val));
         }
 
         void add_enricher(std::function<void(seq_context &)> enricher_) {
@@ -376,11 +388,13 @@ namespace seq_logger {
         inline static std::mutex _s_thread_finished_mutex;
         inline static std::condition_variable _s_thread_finished;
         inline static logging_level _s_verbosity;
-        inline static std::vector<seq_log_entry *> _s_seq_dispatch_queue;
+        inline static std::mutex _s_loggers_mutex;
+        inline static std::vector<seq *> _s_loggers;
+        inline static std::atomic_int32_t _s_logger_id{0};
         inline static logging_level _s_verbosity_seq;
 
-        inline static std::atomic_int32_t _s_logger_id{0};
-        inline static std::mutex _s_logs_lock;
+        mutable std::vector<seq_log_entry *> _seq_dispatch_queue;
+        mutable std::mutex _logs_mutex;
 
         bool _static_instance{false};
         char _name[32]{"Default\0"};
@@ -396,6 +410,7 @@ namespace seq_logger {
             _s_verbosity_seq = logging_level::verbose;
             _s_dispatch_interval = std::chrono::seconds(1);
             _static_instance = true;
+            register_logger(this);
             start_thread();
         }
 
@@ -452,35 +467,57 @@ namespace seq_logger {
         void enqueue(std::string message_, seq_context &&context_) const {
             auto *entry = new seq_log_entry(std::move(message_), std::move(context_));
             static const char esc_char = 27;
-            if (entry->context.level >= verbosity) {
-                std::stringstream ss;
-                ss << entry->time << "\t" << entry->context.logger_name << "\t["
-                   << logging_level_strings_short[entry->context.level] << "]\t" << esc_char << "[1m"
-                   << entry->message() << esc_char
-                   << "[0m\t\t";
-                if (!entry->context.empty()) {
-                    for (size_t i = 0; i < entry->context.size(); ++i) {
-                        ss << entry->context[i].first << "=" << entry->context[i].second.str_val << " ";
-                    }
-                }
-                ss << std::endl;
-                if (entry->context.level > logging_level::warning) {
-                    std::cerr << ss.str();
-                    std::cerr.flush();
-                } else {
-                    std::cout << ss.str();
-                    std::cout.flush();
+
+            if (entry->context.level >= verbosity_seq) {
+                std::lock_guard<std::mutex> guard(_logs_mutex);
+                _seq_dispatch_queue.push_back(entry);
+            }
+
+            if (entry->context.level < verbosity)  return;
+            std::stringstream ss;
+            ss << entry->time << "\t" << entry->context.logger_name << "\t["
+               << logging_level_strings_short[entry->context.level] << "]\t" << esc_char << "[1m"
+               << entry->message() << esc_char
+               << "[0m\t\t";
+            if (!entry->context.empty()) {
+                for (size_t i = 0; i < entry->context.size(); ++i) {
+                    ss << entry->context[i].first << "=" << entry->context[i].second.str_val << " ";
                 }
             }
-            if (entry->context.level < verbosity_seq) return;
-            const std::lock_guard<std::mutex> lock(_s_logs_lock);
-            _s_seq_dispatch_queue.push_back(entry);
+            ss << std::endl;
+            if (entry->context.level > logging_level::warning) {
+                std::cerr << ss.str();
+                std::cerr.flush();
+            } else {
+                std::cout << ss.str();
+                std::cout.flush();
+            }
+        }
+        void transfer_logs(std::vector<seq_log_entry *> &queue){
+            std::lock_guard<std::mutex> guard(_logs_mutex);
+            _seq_dispatch_queue.reserve(_seq_dispatch_queue.size()+queue.size());
+            _seq_dispatch_queue.insert(_seq_dispatch_queue.end(), queue.begin(), queue.end());
+        }
+        void register_logger(seq* logger_){
+            std::lock_guard<std::mutex> guard(_s_loggers_mutex);
+            _s_loggers.push_back(logger_);
         }
 
-        void finalize(const char *name_) {
+        void unregister_logger(seq* logger_) {
+            std::lock_guard<std::mutex> guard(_s_loggers_mutex);
+            auto pos = std::find_if(_s_loggers.begin(), _s_loggers.end(), [&](auto &logger){
+                return logger == logger_;
+            });
+            if (pos!=_s_loggers.end()){
+                _s_loggers.erase(pos);
+            }
+        }
+
+        void finish_initialization(const char *name_) {
             verbosity = _s_verbosity;
             verbosity_seq = _s_verbosity_seq;
             std::strcpy(_name, name_);
+            register_logger(this);
         }
     };
 }
