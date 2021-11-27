@@ -106,10 +106,10 @@ namespace seq_logger {
 
         size_t size() const { return _extras.size(); };
 
-        seq_context(logging_level level_, seq_extras_vector_t &&parameters_, const char * logger_name_) : level(
+        seq_context(logging_level level_, seq_extras_vector_t &&parameters_, const char *logger_name_) : level(
                 level_), logger_name(logger_name_), _extras(std::move(parameters_)) {};
 
-        seq_context(logging_level level_, const seq_extras_vector_t &parameters_, const char * logger_name_)
+        seq_context(logging_level level_, const seq_extras_vector_t &parameters_, const char *logger_name_)
                 : level(level_), logger_name(logger_name_), _extras(parameters_) {};
 
         void add(std::string key_, stringified_value value_) {
@@ -157,7 +157,7 @@ namespace seq_logger {
             return cc;
         }
 
-        [[nodiscard]] const std::string& message() const {
+        [[nodiscard]] const std::string &message() const {
             return _message;
         }
 
@@ -210,7 +210,7 @@ namespace seq_logger {
                 return;
             }
             _s_terminating = true;
-            std::unique_lock<std::mutex> lock {_s_thread_finished_mutex};
+            std::unique_lock<std::mutex> lock{_s_thread_finished_mutex};
             _s_thread_finished.wait(lock);
             send_events_handler();
         }
@@ -229,12 +229,12 @@ namespace seq_logger {
             {
                 std::lock_guard<std::mutex> guard(_s_loggers_mutex);
                 if (_s_loggers.empty()) return;
-                int32_t index = _s_loggers.size()-1;
-                while(index>=0){
+                int32_t index = _s_loggers.size() - 1;
+                while (index >= 0) {
                     auto &logger = _s_loggers[index];
                     std::lock_guard<std::mutex> guard(logger->_logs_mutex);
 
-                    while(!logger->_seq_dispatch_queue.empty()) {
+                    while (!logger->_seq_dispatch_queue.empty()) {
                         hasData = true;
                         sstream << logger->_seq_dispatch_queue.back()->to_raw_json_entry() << "\n";
                         delete logger->_seq_dispatch_queue.back();
@@ -473,7 +473,7 @@ namespace seq_logger {
                 _seq_dispatch_queue.push_back(entry);
             }
 
-            if (entry->context.level < verbosity)  return;
+            if (entry->context.level < verbosity) return;
             std::stringstream ss;
             ss << entry->time << "\t" << entry->context.logger_name << "\t["
                << logging_level_strings_short[entry->context.level] << "]\t" << esc_char << "[1m"
@@ -493,22 +493,24 @@ namespace seq_logger {
                 std::cout.flush();
             }
         }
-        void transfer_logs(std::vector<seq_log_entry *> &queue){
+
+        void transfer_logs(std::vector<seq_log_entry *> &queue) {
             std::lock_guard<std::mutex> guard(_logs_mutex);
-            _seq_dispatch_queue.reserve(_seq_dispatch_queue.size()+queue.size());
+            _seq_dispatch_queue.reserve(_seq_dispatch_queue.size() + queue.size());
             _seq_dispatch_queue.insert(_seq_dispatch_queue.end(), queue.begin(), queue.end());
         }
-        void register_logger(seq* logger_){
+
+        static void register_logger(seq *logger_) {
             std::lock_guard<std::mutex> guard(_s_loggers_mutex);
             _s_loggers.push_back(logger_);
         }
 
-        void unregister_logger(seq* logger_) {
+        static void unregister_logger(seq *logger_) {
             std::lock_guard<std::mutex> guard(_s_loggers_mutex);
-            auto pos = std::find_if(_s_loggers.begin(), _s_loggers.end(), [&](auto &logger){
+            auto pos = std::find_if(_s_loggers.begin(), _s_loggers.end(), [&](auto &logger) {
                 return logger == logger_;
             });
-            if (pos!=_s_loggers.end()){
+            if (pos != _s_loggers.end()) {
                 _s_loggers.erase(pos);
             }
         }
