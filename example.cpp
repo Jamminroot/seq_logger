@@ -11,7 +11,11 @@ public:
         });
         _log.add_enricher([&](seq_logger::seq_context &ctx_) {
             ctx_.add("EnrichedFieldValue", _some_field);
+            if (_some_field>2) {
+                ctx_.level--;
+            }
         });
+        _log.add_property("AddedProperty", time(NULL));
         std::thread t(&entity_with_own_logger::thread_handler, this);
         t.detach();
     }
@@ -30,10 +34,19 @@ private:
     }
 };
 
+int some_field;
 
 int main() {
     using namespace seq_logger;
     seq::init("192.168.0.156:5341", logging_level::verbose, logging_level::verbose, 100);
+    srand(time(NULL));
+    seq::add_shared_property("ProcessRunIdentifier", rand());
+    seq::add_shared_enricher([&](seq_logger::seq_context &ctx) {
+        ctx.add("SomeField", some_field++);
+        if (some_field>9){
+            ctx.level++;
+        }
+    });
 
     seq::log_debug("Static logging", {{"PassedValue", "RandomValue"}});
     seq::log_debug("Static logging", {{"PassedValue", 3}});
