@@ -15,14 +15,17 @@ Feel free to file PRs with your improvements, those would be greatly appreciated
 
 1. Make sure to `::init` seq first - it needs to know where to send logs to:
 
-```c++
-#include <seq.hpp>
+    ```c++
+    #include <seq.hpp>
+    
+    using namespace seq_logger;
+    //                              level of logs to be displayed in console (inherited after init)     
+    //        ↓ seq address:port    ↓                                               ↓ dispatch interval, in millis
+    seq::init("192.168.0.156:5341", logging_level::verbose, logging_level::verbose, 10000);
+    //                                                      ↑ level of logs to be dispatched to seq (inherited after init) 
+    ```
 
-using namespace seq_logger;
-seq::init("192.168.0.156:5341", logging_level::verbose, logging_level::verbose, 10000);
-```
-
-First parameter is console output logging level, second is seq output logging level. Those values are inherited by instanced loggers.
+    First parameter is console output logging level, second is seq output logging level. Those values are inherited by instanced loggers.
 
 2. Use static methods if you don't really need much for logging:
    
