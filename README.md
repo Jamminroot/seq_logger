@@ -66,13 +66,13 @@ Feel free to file PRs with your improvements, those would be greatly appreciated
 * Adjust minimum level of logs to be printed in console with (will be inherited if no other preferences specified)
   
     ```c++
-    seq_logger::seq::shared_level = seq_logger::logging_level::debug
+    seq_logger::seq::base_level = seq_logger::logging_level::debug
     ```
   
 * Adjust minimum level of logs to be sent to seq with (will be inherited if no other preferences specified)
   
     ```c++
-    seq_logger::seq::shared_level_seq = seq_logger::logging_level::debug
+    seq_logger::seq::base_level_seq = seq_logger::logging_level::debug
     ```
   
 * Add enrichers (AKA dynamically-added fields):

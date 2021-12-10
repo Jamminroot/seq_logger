@@ -5,7 +5,8 @@ class entity_with_own_logger{
 public:
     int _some_field;
     entity_with_own_logger(int some_field_) : _some_field(some_field_), _log( ("EntityWithLogger"+std::to_string(some_field_)).c_str()){
-        _log.verbosity = seq_logger::logging_level::debug;
+        _log.level = seq_logger::logging_level::debug;
+        _log.level_seq = seq_logger::logging_level::verbose;
         _log.add_enricher([&](seq_logger::seq_context &ctx_) {
             ctx_.add("EnrichedThreadId", std::this_thread::get_id());
         });
@@ -38,7 +39,9 @@ int some_field;
 
 int main() {
     using namespace seq_logger;
-    seq::init("192.168.0.156:5341", logging_level::verbose, logging_level::verbose, 100);
+    seq::init("192.168.0.156:5341", logging_level::debug, logging_level::debug, 100);
+    seq::base_level = seq_logger::logging_level::debug;
+    seq::base_level_seq = seq_logger::logging_level::verbose;
     srand(time(NULL));
     seq::add_shared_property("ProcessRunIdentifier", rand());
     seq::add_shared_enricher([&](seq_logger::seq_context &ctx) {

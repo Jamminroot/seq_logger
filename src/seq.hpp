@@ -25,29 +25,29 @@ namespace seq_logger {
         fatal = 5
     };
 
-    logging_level& operator++(logging_level& orig)
+    logging_level& operator++(logging_level& other_)
     {
-        orig = static_cast<logging_level>(std::min((orig + 1), 5));
-        return orig;
+        other_ = static_cast<logging_level>(std::min((other_ + 1), 5));
+        return other_;
     }
 
-    logging_level operator++(logging_level& orig, int)
+    logging_level operator++(logging_level& other_, int)
     {
-        logging_level rVal = orig;
-        ++orig;
+        logging_level rVal = other_;
+        ++other_;
         return rVal;
     }
 
-    logging_level& operator--(logging_level& orig)
+    logging_level& operator--(logging_level& other_)
     {
-        orig = static_cast<logging_level>(std::max((orig - 1), 0));
-        return orig;
+        other_ = static_cast<logging_level>(std::max((other_ - 1), 0));
+        return other_;
     }
 
-    logging_level operator--(logging_level& orig, int)
+    logging_level operator--(logging_level& other_, int)
     {
-        logging_level rVal = orig;
-        --orig;
+        logging_level rVal = other_;
+        --other_;
         return rVal;
     }
     const char *const logging_level_strings[6] = {
@@ -104,46 +104,46 @@ namespace seq_logger {
         std::string str_val;
     };
 
-    typedef std::pair<std::string, stringified_value> seq_extras_pair_t;
-    typedef std::vector<seq_extras_pair_t> seq_properties_vector_t;
+    typedef std::pair<std::string, stringified_value> seq_properties_pair_t;
+    typedef std::vector<seq_properties_pair_t> seq_properties_vector_t;
 
     class seq_log_entry;
 
     struct seq_context {
     public:
-        const seq_extras_pair_t &operator[](size_t index_) const {
-            return _extras[index_];
+        const seq_properties_pair_t &operator[](size_t index_) const {
+            return _properties[index_];
         }
 
         void append(const seq_properties_vector_t &other_) {
             if (other_.empty()) return;
-            _extras.insert(_extras.end(), other_.begin(), other_.end());
+            _properties.insert(_properties.end(), other_.begin(), other_.end());
         }
 
-        seq_extras_pair_t &operator[](size_t index) {
-            return _extras[index];
+        seq_properties_pair_t &operator[](size_t index_) {
+            return _properties[index_];
         }
 
         seq_context() = default;
 
-        [[nodiscard]] bool empty() const { return _extras.empty(); };
+        [[nodiscard]] bool empty() const { return _properties.empty(); };
 
-        [[nodiscard]] size_t size() const { return _extras.size(); };
+        [[nodiscard]] size_t size() const { return _properties.size(); };
 
         seq_context(logging_level level_, seq_properties_vector_t &&parameters_, const char *logger_name_) : level(
-                level_), logger_name(logger_name_), _extras(std::move(parameters_)) {};
+                level_), logger_name(logger_name_), _properties(std::move(parameters_)) {};
 
         seq_context(logging_level level_, const seq_properties_vector_t &parameters_, const char *logger_name_)
-                : level(level_), logger_name(logger_name_), _extras(parameters_) {};
+                : level(level_), logger_name(logger_name_), _properties(parameters_) {};
 
         void add(std::string key_, stringified_value value_) {
-            _extras.emplace_back(std::move(key_), std::move(value_));
+            _properties.emplace_back(std::move(key_), std::move(value_));
         }
 
         logging_level level;
         const std::string logger_name;
     private:
-        seq_properties_vector_t _extras;
+        seq_properties_vector_t _properties;
     };
 
 
@@ -200,20 +200,20 @@ namespace seq_logger {
 
     class seq {
     public:
-        inline static logging_level shared_level;
-        inline static logging_level shared_level_seq;
+        inline static logging_level base_level;
+        inline static logging_level base_level_seq;
 
-        logging_level verbosity = logging_level::debug;
-        logging_level verbosity_seq = logging_level::verbose;
+        logging_level level = logging_level::debug;
+        logging_level level_seq = logging_level::verbose;
         seq() {
             finish_initialization({});
         }
 
-        seq(const char *name_, seq_properties_vector_t &&extras_) : _properties(std::move(extras_)) {
+        seq(const char *name_, seq_properties_vector_t &&properties_) : _properties(std::move(properties_)) {
             finish_initialization(name_);
         }
 
-        seq(const char *name_, seq_extras_pair_t &&extra_) : _properties({std::move(extra_)}) {
+        seq(const char *name_, seq_properties_pair_t &&property_pair_) : _properties({std::move(property_pair_)}) {
             finish_initialization(name_);
         }
 
@@ -223,7 +223,7 @@ namespace seq_logger {
 
         explicit seq(const char *name_, logging_level console_logging_level_, logging_level seq_logging_level_) {
             finish_initialization(name_);
-            verbosity = console_logging_level_;
+            level = console_logging_level_;
             verbosity_seq = seq_logging_level_;
         }
 
@@ -239,7 +239,8 @@ namespace seq_logger {
             _s_terminating = true;
             std::unique_lock<std::mutex> lock{_s_thread_finished_mutex};
             _s_thread_finished.wait(lock);
-            send_events_handler();
+            http::Request request("http://" + _s_address + "/api/events/raw?clef");
+            send_events_handler(request);
         }
 
         seq(seq const &) = delete;
@@ -250,7 +251,7 @@ namespace seq_logger {
 
         seq &operator=(seq &&) = delete;
 
-        static void send_events_handler() {
+        static void send_events_handler(http::Request& request_ ) {
             bool hasData(false);
             std::stringstream sstream;
             {
@@ -272,25 +273,23 @@ namespace seq_logger {
                 }
             }
             if (hasData) {
-                try {
-                    auto request = http::Request{_s_endpoint};
-                    request.send("POST", sstream.str(), {
+                try {;
+                    request_.send("POST", sstream.str(), {
                             "Content-type: application/json"
                     });
                 } catch (const std::exception &e) {
-                    std::cerr << "Error while trying to ingest logs:" << e.what() << std::endl;
-                    std::cerr << "Endpoint: " << _s_endpoint << std::endl;
+                    log_error ("Error while trying to ingest logs:", {{"What", e.what()}});
                 }
             }
         }
 
-        static void init(const std::string &address_, logging_level verbosity_, logging_level seq_verbosity_,
+        static void init(std::string address_, logging_level verbosity_, logging_level seq_verbosity_,
                          size_t dispatch_interval_) {
             if (_s_initialized) return;
+            _s_address = std::move(address_);
             _s_initialized = true;
-            shared_level = verbosity_;
-            shared_level_seq = seq_verbosity_;
-            _s_endpoint = "http://" + address_ + "/api/events/raw?clef";
+            base_level = verbosity_;
+            base_level_seq = seq_verbosity_;
             _s_dispatch_interval = std::chrono::milliseconds(dispatch_interval_);
             shared_instance().start_thread();
         }
@@ -312,28 +311,28 @@ namespace seq_logger {
         }
 
 //region instance logging method implementations
-        void verbose(std::string message_, seq_properties_vector_t &&extras_) const {
-            instance_log_generic<logging_level::verbose>(std::move(message_), std::move(extras_));
+        void verbose(std::string message_, seq_properties_vector_t &&properties_) const {
+            instance_log_generic<logging_level::verbose>(std::move(message_), std::move(properties_));
         }
 
-        void debug(std::string message_, seq_properties_vector_t &&extras_) const {
-            instance_log_generic<logging_level::debug>(std::move(message_), std::move(extras_));
+        void debug(std::string message_, seq_properties_vector_t &&properties_) const {
+            instance_log_generic<logging_level::debug>(std::move(message_), std::move(properties_));
         }
 
-        void info(std::string message_, seq_properties_vector_t &&extras_) const {
-            instance_log_generic<logging_level::info>(std::move(message_), std::move(extras_));
+        void info(std::string message_, seq_properties_vector_t &&properties_) const {
+            instance_log_generic<logging_level::info>(std::move(message_), std::move(properties_));
         }
 
-        void warning(std::string message_, seq_properties_vector_t &&extras_) const {
-            instance_log_generic<logging_level::warning>(std::move(message_), std::move(extras_));
+        void warning(std::string message_, seq_properties_vector_t &&properties_) const {
+            instance_log_generic<logging_level::warning>(std::move(message_), std::move(properties_));
         }
 
-        void error(std::string message_, seq_properties_vector_t &&extras_) const {
-            instance_log_generic<logging_level::error>(std::move(message_), std::move(extras_));
+        void error(std::string message_, seq_properties_vector_t &&properties_) const {
+            instance_log_generic<logging_level::error>(std::move(message_), std::move(properties_));
         }
 
-        void fatal(std::string message_, seq_properties_vector_t &&extras_) const {
-            instance_log_generic<logging_level::fatal>(std::move(message_), std::move(extras_));
+        void fatal(std::string message_, seq_properties_vector_t &&properties_) const {
+            instance_log_generic<logging_level::fatal>(std::move(message_), std::move(properties_));
         }
 
         void verbose(std::string message_) const {
@@ -388,34 +387,34 @@ namespace seq_logger {
             shared_instance().instance_log_generic<logging_level::fatal>(std::move(message_));
         }
 
-        static void log_verbose(std::string message_, seq_properties_vector_t &&extras_) {
-            shared_instance().instance_log_generic<logging_level::verbose>(std::move(message_), std::move(extras_));
+        static void log_verbose(std::string message_, seq_properties_vector_t &&properties_) {
+            shared_instance().instance_log_generic<logging_level::verbose>(std::move(message_), std::move(properties_));
         }
 
-        static void log_debug(std::string message_, seq_properties_vector_t &&extras_) {
-            shared_instance().instance_log_generic<logging_level::debug>(std::move(message_), std::move(extras_));
+        static void log_debug(std::string message_, seq_properties_vector_t &&properties_) {
+            shared_instance().instance_log_generic<logging_level::debug>(std::move(message_), std::move(properties_));
         }
 
-        static void log_info(std::string message_, seq_properties_vector_t &&extras_) {
-            shared_instance().instance_log_generic<logging_level::info>(std::move(message_), std::move(extras_));
+        static void log_info(std::string message_, seq_properties_vector_t &&properties_) {
+            shared_instance().instance_log_generic<logging_level::info>(std::move(message_), std::move(properties_));
         }
 
-        static void log_warning(std::string message_, seq_properties_vector_t &&extras_) {
-            shared_instance().instance_log_generic<logging_level::warning>(std::move(message_), std::move(extras_));
+        static void log_warning(std::string message_, seq_properties_vector_t &&properties_) {
+            shared_instance().instance_log_generic<logging_level::warning>(std::move(message_), std::move(properties_));
         }
 
-        static void log_error(std::string message_, seq_properties_vector_t &&extras_) {
-            shared_instance().instance_log_generic<logging_level::error>(std::move(message_), std::move(extras_));
+        static void log_error(std::string message_, seq_properties_vector_t &&properties_) {
+            shared_instance().instance_log_generic<logging_level::error>(std::move(message_), std::move(properties_));
         }
 
-        static void log_fatal(std::string message_, seq_properties_vector_t &&extras_) {
-            shared_instance().instance_log_generic<logging_level::fatal>(std::move(message_), std::move(extras_));
+        static void log_fatal(std::string message_, seq_properties_vector_t &&properties_) {
+            shared_instance().instance_log_generic<logging_level::fatal>(std::move(message_), std::move(properties_));
         }
 //endregion
     private:
         inline static bool _s_initialized;
         inline static bool _s_terminating;
-        inline static std::string _s_endpoint;
+        inline static std::string _s_address;
         inline static std::chrono::duration<long long, std::milli> _s_dispatch_interval;
         inline static std::mutex _s_thread_finished_mutex;
         inline static std::condition_variable _s_thread_finished;
@@ -438,30 +437,44 @@ namespace seq_logger {
         seq(bool) {
             _s_initialized = false;
             _s_terminating = false;
-            shared_level = logging_level::verbose;
-            shared_level_seq = logging_level::verbose;
+            base_level = logging_level::verbose;
+            base_level_seq = logging_level::verbose;
             _s_dispatch_interval = std::chrono::seconds(10);
             _static_instance = true;
             register_logger(this);
         }
 
         static void send_events_loop_handler() {
+            bool seq_ready(false);
+            try {
+                http::Request health_check_request("http://" + _s_address + "/health");
+                auto response = health_check_request.send();
+                if (response.status == 200 || std::string{response.body.begin(), response.body.end()}.find("The Seq node is in service.") != std::string::npos) {
+                    seq_ready = true;
+                } else {
+                    log_warning("Seq ingestion not ready");
+                }
+            } catch (const std::exception &e) {
+                log_error("Error while checking Seq status", {{"What", e.what()}});
+            }
+            if (!seq_ready) return;
+            http::Request request("http://" + _s_address + "/api/events/raw?clef");
             while (!_s_terminating) {
                 std::this_thread::sleep_for(_s_dispatch_interval);
-                send_events_handler();
+                send_events_handler(request);
             }
             _s_thread_finished.notify_all();
         }
 
         template<logging_level L>
-        void instance_log_generic(std::string message_, seq_properties_vector_t &&extras_) const {
-            if (L < verbosity && L < verbosity_seq) return;
-            enqueue(std::move(message_), make_context(L, extras_));
+        void instance_log_generic(std::string message_, seq_properties_vector_t &&properties_) const {
+            if (L < level && L < verbosity_seq) return;
+            enqueue(std::move(message_), make_context(L, properties_));
         }
 
         template<logging_level L>
         void instance_log_generic(std::string message_) const {
-            if (L < verbosity && L < verbosity_seq) return;
+            if (L < level && L < verbosity_seq) return;
             enqueue(std::move(message_), make_context(L));
         }
 
@@ -476,8 +489,8 @@ namespace seq_logger {
             return instance;
         }
 
-        seq_context make_context(logging_level level_, seq_properties_vector_t extras_) const {
-            auto ctx = seq_context(level_, std::move(extras_), _name);
+        seq_context make_context(logging_level level_, seq_properties_vector_t properties_) const {
+            auto ctx = seq_context(level_, std::move(properties_), _name);
             ctx.append(_properties);
             ctx.append(_s_shared_properties);
             if (!_enrichers.empty()) {
@@ -518,7 +531,7 @@ namespace seq_logger {
                 _seq_dispatch_queue.push_back(entry);
             }
 
-            if (entry->context.level < verbosity) return;
+            if (entry->context.level < level) return;
             std::stringstream ss;
             ss << entry->time << "\t" << entry->context.logger_name << "\t["
                << logging_level_strings_short[entry->context.level] << "]\t" << esc_char << "[1m"
@@ -561,8 +574,8 @@ namespace seq_logger {
         }
 
         void finish_initialization(const char *name_) {
-            verbosity = shared_level;
-            verbosity_seq = shared_level_seq;
+            level = base_level;
+            verbosity_seq = base_level_seq;
             std::strcpy(_name, name_);
             register_logger(this);
         }
