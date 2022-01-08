@@ -39,7 +39,7 @@ int some_field;
 
 int main() {
     using namespace seq_logger;
-    seq::init("192.168.0.156:5341", logging_level::debug, logging_level::debug, 100);
+    seq::init("192.168.0.156:5341", logging_level::debug, logging_level::debug, 100 /*, "<SOME_SEQ_API_KEY>"*/);
     seq::base_level = seq_logger::logging_level::debug;
     seq::base_level_seq = seq_logger::logging_level::verbose;
     srand(time(NULL));

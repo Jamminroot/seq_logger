@@ -273,10 +273,22 @@ namespace seq_logger {
                 }
             }
             if (hasData) {
-                try {;
-                    request_.send("POST", sstream.str(), {
+                try {
+                    http::Response resp;
+                    if (_s_auth_header.empty()) {
+                        resp = request_.send("POST", sstream.str(), {
                             "Content-type: application/json"
                     });
+                    } else {
+                        resp = request_.send("POST", sstream.str(), {
+                                "Content-type: application/json",
+                                _s_auth_header
+                        });
+                    }
+                    if (resp.status > 300) {
+                        std::string body(resp.body.begin(), resp.body.end());
+                        std::cout << "Error while sending batch " << resp.status << ":" << resp.description << "\n" << body << std::endl;
+                    }
                 } catch (const std::exception &e) {
                     log_error ("Error while trying to ingest logs:", {{"What", e.what()}});
                 }
@@ -284,9 +296,14 @@ namespace seq_logger {
         }
 
         static void init(std::string address_, logging_level verbosity_, logging_level seq_verbosity_,
-                         size_t dispatch_interval_) {
+                         size_t dispatch_interval_, const std::string &api_key_ = "") {
             if (_s_initialized) return;
             _s_address = std::move(address_);
+            if (!api_key_.empty()) {
+                std::stringstream ss;
+                ss << "X-Seq-ApiKey: " << api_key_;
+                _s_auth_header = ss.str();
+            }
             _s_initialized = true;
             base_level = verbosity_;
             base_level_seq = seq_verbosity_;
@@ -415,6 +432,7 @@ namespace seq_logger {
         inline static bool _s_initialized;
         inline static bool _s_terminating;
         inline static std::string _s_address;
+        inline static std::string _s_auth_header;
         inline static std::chrono::duration<long long, std::milli> _s_dispatch_interval;
         inline static std::mutex _s_thread_finished_mutex;
         inline static std::condition_variable _s_thread_finished;

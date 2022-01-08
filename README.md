@@ -20,9 +20,10 @@ Feel free to file PRs with your improvements, those would be greatly appreciated
     
     using namespace seq_logger;
     //                              level of logs to be displayed in console (inherited after init)     
-    //        ↓ seq address:port    ↓                                               ↓ dispatch interval, in millis
-    seq::init("192.168.0.156:5341", logging_level::verbose, logging_level::verbose, 10000);
-    //                                                      ↑ level of logs to be dispatched to seq (inherited after init) 
+    //                              |                                               dispatch interval, in millis
+    //         ↓seq address:port    ↓                                               ↓       ↓ApiKey for SEQ
+    seq::init("192.168.0.156:5341", logging_level::verbose, logging_level::verbose, 10000, "123123123");
+    //                                                      ↑level of logs to be dispatched to seq (inherited after init) 
     ```
 
     First parameter is console output logging level, second is seq output logging level. Those values are inherited by instanced loggers.
