@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <iomanip>
 #include <iostream>
 #include <chrono>
 #include <condition_variable>
@@ -16,6 +17,45 @@
 #include "HTTPRequest.hpp"
 
 namespace seq_logger {
+    struct helpers {
+        static inline std::string escape_json(const std::string &s) {
+            std::ostringstream o;
+            for (char c: s) {
+                switch (c) {
+                    case '"':
+                        o << "\\\"";
+                        break;
+                    case '\\':
+                        o << "\\\\";
+                        break;
+                    case '\b':
+                        o << "\\b";
+                        break;
+                    case '\f':
+                        o << "\\f";
+                        break;
+                    case '\n':
+                        o << "\\n";
+                        break;
+                    case '\r':
+                        o << "\\r";
+                        break;
+                    case '\t':
+                        o << "\\t";
+                        break;
+                    default:
+                        if ('\x00' <= c && c <= '\x1f') {
+                            o << "\\u"
+                              << std::hex << std::setw(4) << std::setfill('0') << (int) c;
+                        } else {
+                            o << c;
+                        }
+                }
+            }
+            return o.str();
+        }
+    };
+
     enum logging_level {
         verbose = 0,
         debug = 1,
@@ -50,6 +90,7 @@ namespace seq_logger {
         --other_;
         return rVal;
     }
+
     const char *const logging_level_strings[6] = {
             "Verbose",
             "Debug",
@@ -69,7 +110,7 @@ namespace seq_logger {
     struct stringified_value {
         stringified_value() = default;
 
-        explicit stringified_value(const char *_value) : str_val(_value) {};
+        explicit stringified_value(const char *_value) : str_val(_value == nullptr ? "" : _value) {};
 
         explicit stringified_value(const std::string &value_) : str_val(value_) {};
 
@@ -159,7 +200,7 @@ namespace seq_logger {
 
         [[nodiscard]] std::string to_raw_json_entry() const {
             std::stringstream sstream;
-            sstream << R"({"@t": ")" << time << R"(", "@mt":")" << _message << R"(", "@l":")"
+            sstream << R"({"@t": ")" << time << R"(", "@mt":")" << helpers::escape_json(_message) << R"(", "@l":")"
                     << logging_level_strings[context.level] << R"(","Logger":")" << context.logger_name << "\"";
             if (context.empty()) {
                 sstream << "}";
@@ -167,7 +208,7 @@ namespace seq_logger {
             }
             auto parameters_specified = context.size();
             for (size_t i = 0; i < parameters_specified; ++i) {
-                sstream << ",\"" << context[i].first << "\":\"" << context[i].second.str_val << "\"";
+                sstream << ",\"" << helpers::escape_json(context[i].first) << "\":\"" << helpers::escape_json(context[i].second.str_val) << "\"";
             }
             sstream << "}";
             auto str = sstream.str();
@@ -205,6 +246,7 @@ namespace seq_logger {
 
         logging_level level = logging_level::debug;
         logging_level level_seq = logging_level::verbose;
+
         seq() {
             finish_initialization({});
         }
@@ -224,7 +266,7 @@ namespace seq_logger {
         explicit seq(const char *name_, logging_level console_logging_level_, logging_level seq_logging_level_) {
             finish_initialization(name_);
             level = console_logging_level_;
-            verbosity_seq = seq_logging_level_;
+            level_seq = seq_logging_level_;
         }
 
 
@@ -251,7 +293,7 @@ namespace seq_logger {
 
         seq &operator=(seq &&) = delete;
 
-        static void send_events_handler(http::Request& request_ ) {
+        static void send_events_handler(http::Request &request_) {
             bool hasData(false);
             std::stringstream sstream;
             {
@@ -277,8 +319,8 @@ namespace seq_logger {
                     http::Response resp;
                     if (_s_auth_header.empty()) {
                         resp = request_.send("POST", sstream.str(), {
-                            "Content-type: application/json"
-                    });
+                                "Content-type: application/json"
+                        });
                     } else {
                         resp = request_.send("POST", sstream.str(), {
                                 "Content-type: application/json",
@@ -290,7 +332,7 @@ namespace seq_logger {
                         std::cout << "Error while sending batch " << resp.status << ":" << resp.description << "\n" << body << std::endl;
                     }
                 } catch (const std::exception &e) {
-                    log_error ("Error while trying to ingest logs:", {{"What", e.what()}});
+                    log_error("Error while trying to ingest logs:", {{"What", e.what()}});
                 }
             }
         }
@@ -486,13 +528,13 @@ namespace seq_logger {
 
         template<logging_level L>
         void instance_log_generic(std::string message_, seq_properties_vector_t &&properties_) const {
-            if (L < level && L < verbosity_seq) return;
+            if (L < level && L < level_seq) return;
             enqueue(std::move(message_), make_context(L, properties_));
         }
 
         template<logging_level L>
         void instance_log_generic(std::string message_) const {
-            if (L < level && L < verbosity_seq) return;
+            if (L < level && L < level_seq) return;
             enqueue(std::move(message_), make_context(L));
         }
 
@@ -544,29 +586,30 @@ namespace seq_logger {
             auto *entry = new seq_log_entry(std::move(message_), std::move(context_));
             static const char esc_char = 27;
 
-            if (entry->context.level >= verbosity_seq) {
+            if (entry->context.level >= level_seq) {
                 std::lock_guard<std::mutex> guard(_logs_mutex);
                 _seq_dispatch_queue.push_back(entry);
             }
 
-            if (entry->context.level < level) return;
-            std::stringstream ss;
-            ss << entry->time << "\t" << entry->context.logger_name << "\t["
-               << logging_level_strings_short[entry->context.level] << "]\t" << esc_char << "[1m"
-               << entry->message() << esc_char
-               << "[0m\t\t";
-            if (!entry->context.empty()) {
-                for (size_t i = 0; i < entry->context.size(); ++i) {
-                    ss << entry->context[i].first << "=" << entry->context[i].second.str_val << " ";
+            if (entry->context.level >= level) {
+                std::stringstream ss;
+                ss << entry->time << "\t" << entry->context.logger_name << "\t["
+                   << logging_level_strings_short[entry->context.level] << "]\t" << esc_char << "[1m"
+                   << entry->message() << esc_char
+                   << "[0m\t\t";
+                if (!entry->context.empty()) {
+                    for (size_t i = 0; i < entry->context.size(); ++i) {
+                        ss << entry->context[i].first << "=" << entry->context[i].second.str_val << " ";
+                    }
                 }
-            }
-            ss << std::endl;
-            if (entry->context.level > logging_level::warning) {
-                std::cerr << ss.str();
-                std::cerr.flush();
-            } else {
-                std::cout << ss.str();
-                std::cout.flush();
+                ss << std::endl;
+                if (entry->context.level > logging_level::warning) {
+                    std::cerr << ss.str();
+                    std::cerr.flush();
+                } else {
+                    std::cout << ss.str();
+                    std::cout.flush();
+                }
             }
         }
 
@@ -593,7 +636,7 @@ namespace seq_logger {
 
         void finish_initialization(const char *name_) {
             level = base_level;
-            verbosity_seq = base_level_seq;
+            level_seq = base_level_seq;
             std::strcpy(_name, name_);
             register_logger(this);
         }
