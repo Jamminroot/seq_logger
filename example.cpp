@@ -1,11 +1,11 @@
-#include <thread>
-#include "src/seq.hpp"
+
+#include "additional_unit.h"
 
 class entity_with_own_logger{
 public:
     int _some_field;
     entity_with_own_logger(int some_field_) : _some_field(some_field_), _log( ("EntityWithLogger"+std::to_string(some_field_)).c_str()){
-        _log.level = seq_logger::logging_level::debug;
+        _log.level_console = seq_logger::logging_level::debug;
         _log.level_seq = seq_logger::logging_level::verbose;
         _log.add_enricher([&](seq_logger::seq_context &ctx_) {
             ctx_.add("EnrichedThreadId", std::this_thread::get_id());
@@ -39,8 +39,9 @@ int some_field;
 
 int main() {
     using namespace seq_logger;
-    seq::init("192.168.0.156:5341", logging_level::debug, logging_level::debug, 100 /*, "<SOME_SEQ_API_KEY>"*/);
-    seq::base_level = seq_logger::logging_level::debug;
+    seq::init("127.0.0.1:5341", logging_level::debug, logging_level::debug, 100, ""/*, "<SOME_SEQ_API_KEY>"*/, 1000,
+              true);
+    seq::base_level_console = seq_logger::logging_level::debug;
     seq::base_level_seq = seq_logger::logging_level::verbose;
     srand(time(NULL));
     seq::add_shared_property("ProcessRunIdentifier", rand());
@@ -59,7 +60,12 @@ int main() {
         seq::log_debug("Creating new entity with logger!");
         vec.emplace_back(std::make_shared<entity_with_own_logger>(i));
     }
+    entity_with_own_logger e1(1);
 
+    seq::log_verbose("Should not be visible");
+    seq::log_warning("Should be visible");
+    auto au = additional_unit();
+    au.do_something();
     std::this_thread::sleep_for(std::chrono::milliseconds(1500));
     return 0;
 }

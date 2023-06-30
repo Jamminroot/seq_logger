@@ -65,26 +65,26 @@ namespace seq_logger {
         fatal = 5
     };
 
-    logging_level& operator++(logging_level& other_)
+    inline logging_level& operator++(logging_level& other_)
     {
         other_ = static_cast<logging_level>(std::min((other_ + 1), 5));
         return other_;
     }
 
-    logging_level operator++(logging_level& other_, int)
+    inline logging_level operator++(logging_level& other_, int c)
     {
         logging_level rVal = other_;
         ++other_;
         return rVal;
     }
 
-    logging_level& operator--(logging_level& other_)
+    inline logging_level& operator--(logging_level& other_)
     {
         other_ = static_cast<logging_level>(std::max((other_ - 1), 0));
         return other_;
     }
 
-    logging_level operator--(logging_level& other_, int)
+    inline logging_level operator--(logging_level& other_, int c)
     {
         logging_level rVal = other_;
         --other_;
@@ -156,6 +156,7 @@ namespace seq_logger {
             return _properties[index_];
         }
 
+        ///\brief Add a property to the context
         void append(const seq_properties_vector_t &other_) {
             if (other_.empty()) return;
             _properties.insert(_properties.end(), other_.begin(), other_.end());
@@ -177,11 +178,15 @@ namespace seq_logger {
         seq_context(logging_level level_, const seq_properties_vector_t &parameters_, const char *logger_name_)
                 : level(level_), logger_name(logger_name_), _properties(parameters_) {};
 
+        ///\brief Add a property to the context
         void add(std::string key_, stringified_value value_) {
             _properties.emplace_back(std::move(key_), std::move(value_));
         }
 
+        ///\brief Level of the context
         logging_level level;
+
+        ///\brief Name of the logger
         const std::string logger_name;
     private:
         seq_properties_vector_t _properties;
@@ -241,46 +246,73 @@ namespace seq_logger {
 
     class seq {
     public:
-        inline static logging_level base_level;
+        ///\brief Base console logging level for all loggers - when other loggers are created, that level is used as a base
+        inline static logging_level base_level_console;
+
+        ///\brief Base seq logging level for all loggers - when other loggers are created, that level is used as a base
         inline static logging_level base_level_seq;
 
-        logging_level level = logging_level::debug;
+        ///\brief Console logging level for this logger
+        logging_level level_console = logging_level::debug;
+
+        ///\brief Seq logging level for this logger
         logging_level level_seq = logging_level::verbose;
 
+
+        ///\brief Default constructor
         seq() {
             finish_initialization({});
         }
 
+        ///\brief Constructor with properties
+        ///\param properties_ Properties to be added to the logger
         seq(const char *name_, seq_properties_vector_t &&properties_) : _properties(std::move(properties_)) {
             finish_initialization(name_);
         }
 
+        ///\brief Constructor with properties
+        ///\param properties_ Properties to be added to the logger
         seq(const char *name_, seq_properties_pair_t &&property_pair_) : _properties({std::move(property_pair_)}) {
             finish_initialization(name_);
         }
 
+        ///\brief Constructor with name
+        ///\param name_ Name of the logger
         explicit seq(const char *name_) {
             finish_initialization(name_);
         }
 
-        explicit seq(const char *name_, logging_level console_logging_level_, logging_level seq_logging_level_) {
+        ///\brief Constructor with name and logging levels
+        ///\param name_ Name of the logger
+        /// \param console_verbosity_ Logging level for the console, e.g. logging_level::info would output info, but not debug messages
+        /// \param seq_verbosity_ Logging level for SEQ, e.g. logging_level::info would output info, but not debug messages
+        explicit seq(const char *name_, logging_level console_verbosity_, logging_level seq_verbosity_) {
             finish_initialization(name_);
-            level = console_logging_level_;
-            level_seq = seq_logging_level_;
+            level_console = console_verbosity_;
+            level_seq = seq_verbosity_;
         }
 
 
         ~seq() {
             _enrichers.clear();
+
             if (!_static_instance) {
                 std::lock_guard<std::mutex> guard(_logs_mutex);
                 unregister_logger(this);
                 shared_instance().transfer_logs(_seq_dispatch_queue);
                 return;
             }
-            _s_terminating = true;
+
+            {
+                std::unique_lock<std::mutex> lock{_s_thread_finished_mutex};
+                _s_terminating = true;
+            }
+
             std::unique_lock<std::mutex> lock{_s_thread_finished_mutex};
             _s_thread_finished.wait(lock);
+            if (_s_thread.joinable()) {
+                _s_thread.join();
+            }
             http::Request request("http://" + _s_address + "/api/events/raw?clef");
             send_events_handler(request);
         }
@@ -293,78 +325,46 @@ namespace seq_logger {
 
         seq &operator=(seq &&) = delete;
 
-        static void send_events_handler(http::Request &request_) {
-            bool hasData(false);
-            std::stringstream sstream;
-            {
-                std::lock_guard<std::mutex> static_guard(_s_loggers_mutex);
-                if (_s_loggers.empty()) return;
-                int32_t index = _s_loggers.size() - 1;
-                while (index >= 0) {
-                    auto &logger = _s_loggers[index];
-                    std::lock_guard<std::mutex> guard(logger->_logs_mutex);
-
-                    while (!logger->_seq_dispatch_queue.empty()) {
-                        hasData = true;
-                        sstream << logger->_seq_dispatch_queue.back()->to_raw_json_entry() << "\n";
-                        delete logger->_seq_dispatch_queue.back();
-                        logger->_seq_dispatch_queue.pop_back();
-                    }
-
-                    --index;
-                }
-            }
-            if (hasData) {
-                try {
-                    http::Response resp;
-                    if (_s_auth_header.empty()) {
-                        resp = request_.send("POST", sstream.str(), {
-                                "Content-type: application/json"
-                        });
-                    } else {
-                        resp = request_.send("POST", sstream.str(), {
-                                "Content-type: application/json",
-                                _s_auth_header
-                        });
-                    }
-                    if (resp.status > 300) {
-                        std::string body(resp.body.begin(), resp.body.end());
-                        std::cout << "Error while sending batch " << resp.status << ":" << resp.description << "\n" << body << std::endl;
-                    }
-                } catch (const std::exception &e) {
-                    log_error("Error while trying to ingest logs:", {{"What", e.what()}});
-                }
-            }
-        }
-
-        static void init(std::string address_, logging_level verbosity_, logging_level seq_verbosity_,
-                         size_t dispatch_interval_, const std::string &api_key_ = "") {
+        /// \brief Initialize the Seq logger
+        /// \param address_ Address of the Seq server, e.g. 127.0.0.1:5341
+        /// \param console_verbosity_ Logging level for the console, e.g. logging_level::info would output info, but not debug messages
+        /// \param seq_verbosity_ Logging level for SEQ, e.g. logging_level::info would output info, but not debug messages
+        /// \param dispatch_interval_ Interval at which to send logs to SEQ, in milliseconds
+        /// \param api_key_ Seq API key
+        /// \param seq_init_timeout Timeout for SEQ initialization, in milliseconds. If SEQ is not available after this time, the logger will start without SEQ if allow_without_seq is true
+        /// \param allow_without_seq If SEQ is not available, allow the logger to start without SEQ
+        static void init(std::string address_, logging_level console_verbosity_, logging_level seq_verbosity_,
+                         size_t dispatch_interval_, const std::string &api_key_ = "", int seq_init_timeout = 1000, bool allow_without_seq = true) {
             if (_s_initialized) return;
             _s_address = std::move(address_);
             if (!api_key_.empty()) {
-                std::stringstream ss;
-                ss << "X-Seq-ApiKey: " << api_key_;
-                _s_auth_header = ss.str();
+                _s_auth_header = api_key_;
             }
             _s_initialized = true;
-            base_level = verbosity_;
+            base_level_console = console_verbosity_;
             base_level_seq = seq_verbosity_;
             _s_dispatch_interval = std::chrono::milliseconds(dispatch_interval_);
-            shared_instance().start_thread();
+            shared_instance().start_thread(seq_init_timeout, allow_without_seq);
         }
 
+        /// \brief Add a property to all logs
+        /// \param key_
+        /// \param val_
         void add_property(std::string key_, stringified_value val_) {
             _properties.emplace_back(std::move(key_), std::move(val_));
         }
 
+        /// \brief Add a property to all logs
         static void add_shared_property(std::string key_, stringified_value val_) {
             _s_shared_properties.emplace_back(std::move(key_), std::move(val_));
         }
 
+        /// \brief Add a property to all logs with a value that is evaluated at runtime
         void add_enricher(std::function<void(seq_context &)> enricher_) {
             _enrichers.push_back(std::move(enricher_));
         }
 
+        /// \brief Add a property to all logs with a value that is evaluated at runtime
         static void add_shared_enricher(std::function<void(seq_context &)> enricher_) {
             _s_enrichers.push_back(std::move(enricher_));
         }
@@ -477,7 +477,9 @@ namespace seq_logger {
         inline static std::string _s_auth_header;
         inline static std::chrono::duration<long long, std::milli> _s_dispatch_interval;
         inline static std::mutex _s_thread_finished_mutex;
+        inline static std::mutex _s_thread_started_mutex;
         inline static std::condition_variable _s_thread_finished;
+        inline static std::condition_variable _s_thread_started;
         inline static std::mutex _s_loggers_mutex;
         inline static std::vector<seq *> _s_loggers;
         inline static std::atomic_int32_t _s_logger_id{0};
@@ -493,23 +495,70 @@ namespace seq_logger {
         seq_properties_vector_t _properties;
         std::vector<std::function<void(seq_context &)>> _enrichers;
         const int32_t id = _s_logger_id++;
-
+        std::thread _s_thread;
         seq(bool) {
             _s_initialized = false;
             _s_terminating = false;
-            base_level = logging_level::verbose;
+            base_level_console = logging_level::verbose;
             base_level_seq = logging_level::verbose;
             _s_dispatch_interval = std::chrono::seconds(10);
             _static_instance = true;
             register_logger(this);
         }
 
-        static void send_events_loop_handler() {
+        static void send_events_handler(http::Request &request_) {
+            bool hasData(false);
+            std::stringstream sstream;
+            {
+                std::lock_guard<std::mutex> static_guard(_s_loggers_mutex);
+                if (_s_loggers.empty()) return;
+                int32_t index = _s_loggers.size() - 1;
+                while (index >= 0) {
+                    auto &logger = _s_loggers[index];
+                    std::lock_guard<std::mutex> guard(logger->_logs_mutex);
+
+                    while (!logger->_seq_dispatch_queue.empty()) {
+                        hasData = true;
+                        sstream << logger->_seq_dispatch_queue.back()->to_raw_json_entry() << "\n";
+                        delete logger->_seq_dispatch_queue.back();
+                        logger->_seq_dispatch_queue.pop_back();
+                    }
+
+                    --index;
+                }
+            }
+            if (hasData) {
+                try {
+                    http::Response resp;
+                    if (_s_auth_header.empty()) {
+                        resp = request_.send("POST", sstream.str(), {{
+                                                                             "Content-type", "application/json"
+                                                                     }});
+                    } else {
+                        resp = request_.send("POST", sstream.str(), {
+                                {"Content-type", "application/json" },
+                                {"X-Seq-ApiKey", _s_auth_header}
+                        });
+                    }
+                    if (resp.status.code > 300) {
+                        std::string body(resp.body.begin(), resp.body.end());
+                        std::cout << "Error while sending batch " << resp.status.code << ":" << resp.status.reason << "\n" << body << std::endl;
+                    }
+                } catch (const std::exception &e) {
+                    log_error("Error while trying to ingest logs:", {{"What", e.what()}});
+                }
+            }
+        }
+
+        static void send_events_loop_handler(int timeout, bool allow_without_seq) {
             bool seq_ready(false);
             try {
                 http::Request health_check_request("http://" + _s_address + "/health");
-                auto response = health_check_request.send();
-                if (response.status == 200 || std::string{response.body.begin(), response.body.end()}.find("The Seq node is in service.") != std::string::npos) {
+
+                auto response = health_check_request.send("GET", "", {}, std::chrono::milliseconds(timeout));
+                if (response.status.code == 200 ||
+                    std::string{response.body.begin(), response.body.end()}.find("The Seq node is in service.") !=
+                    std::string::npos) {
                     seq_ready = true;
                 } else {
                     log_warning("Seq ingestion not ready");
@@ -517,31 +566,54 @@ namespace seq_logger {
             } catch (const std::exception &e) {
                 log_error("Error while checking Seq status", {{"What", e.what()}});
             }
-            if (!seq_ready) return;
+
+            if (!seq_ready) {
+                if (allow_without_seq){
+                    log_info("Seq failed to initialize, but working without it is allowed. Only using console output.");
+                } else {
+                    std::unique_lock<std::mutex> lock{_s_thread_finished_mutex};
+                    _s_terminating = true;
+                    _s_thread_finished.notify_all();
+                    return;
+                }
+            }
+
             http::Request request("http://" + _s_address + "/api/events/raw?clef");
+
+            {
+                std::unique_lock<std::mutex> lock_start{_s_thread_started_mutex};
+                _s_thread_started.notify_all();
+            }
+
             while (!_s_terminating) {
                 std::this_thread::sleep_for(_s_dispatch_interval);
                 send_events_handler(request);
             }
+
+            std::unique_lock<std::mutex> lock{_s_thread_finished_mutex};
             _s_thread_finished.notify_all();
         }
 
         template<logging_level L>
         void instance_log_generic(std::string message_, seq_properties_vector_t &&properties_) const {
-            if (L < level && L < level_seq) return;
+            if (L < level_console && L < level_seq) return;
             enqueue(std::move(message_), make_context(L, properties_));
         }
 
         template<logging_level L>
         void instance_log_generic(std::string message_) const {
-            if (L < level && L < level_seq) return;
+            if (L < level_console && L < level_seq) return;
             enqueue(std::move(message_), make_context(L));
         }
 
-        void start_thread() {
+        void start_thread(int timeout, bool allow_without_seq) {
             if (!_static_instance) return;
-            std::thread t(&seq::send_events_loop_handler);
-            t.detach();
+            _s_thread = std::thread(&seq::send_events_loop_handler, timeout, allow_without_seq);
+            _s_thread.detach();
+            {
+                std::unique_lock<std::mutex> lock_start{_s_thread_started_mutex};
+                _s_thread_started.wait(lock_start);
+            }
         }
 
         [[nodiscard]] static seq &shared_instance() {
@@ -591,7 +663,7 @@ namespace seq_logger {
                 _seq_dispatch_queue.push_back(entry);
             }
 
-            if (entry->context.level >= level) {
+            if (entry->context.level >= level_console) {
                 std::stringstream ss;
                 ss << entry->time << "\t" << entry->context.logger_name << "\t["
                    << logging_level_strings_short[entry->context.level] << "]\t" << esc_char << "[1m"
@@ -635,7 +707,7 @@ namespace seq_logger {
         }
 
         void finish_initialization(const char *name_) {
-            level = base_level;
+            level_console = base_level_console;
             level_seq = base_level_seq;
             std::strcpy(_name, name_);
             register_logger(this);
